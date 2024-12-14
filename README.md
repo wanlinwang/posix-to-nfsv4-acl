@@ -5,7 +5,7 @@
 ## 目录结构
 
 ```
-acl_converting_py/
+posix_to_nfs4_acl/
 ├── posix_to_nfs4_acl.py          # 主脚本，执行POSIX->NFSv4的转换逻辑
 └── test_posix_to_nfs4_acl.py     # 单元测试脚本，基于unittest
 ```
