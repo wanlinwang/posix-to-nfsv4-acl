@@ -87,7 +87,7 @@ posix_to_nfs4_acl/
 
 本项目可采用任意**开源许可证**，如 MIT 或 Apache-2.0，自由选择并在README底部注明：
 ```
-MIT License
-Copyright (c) 2024 ...
-Permission is hereby granted...
+GPLv3 License
+Copyright (c) 2024
+Permission is hereby granted
 ```
