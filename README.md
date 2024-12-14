@@ -36,7 +36,7 @@ posix_to_nfs4_acl/
 
 1. **克隆仓库**：  
    ```bash
-   git clone https://github.com/YourUsername/posix-to-nfs4-acl.git
+   git clone https://github.com/wanlinwang/posix-to-nfs4-acl.git
    cd posix-to-nfs4-acl
    ```
 
