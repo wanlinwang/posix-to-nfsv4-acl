@@ -181,10 +181,8 @@ def build_nfs4_ace(acl_info, path="/dummy", domain='localdomain'):
         elif entry_type == 'other':
             pass
     return ace_list
-    #cmd = ["nfs4_setfacl", "-s"] + ace_list + [path]
-    #return cmd
 
-def convert_acl_for_directory(root_dir, domain='localdomain', max_depth=3, nfs4_cmd_file='nfs4_acl_cmds.txt'):
+def convert_acl_for_directory(root_dir, new_root_dir, domain='localdomain', max_depth=3, nfs4_cmd_file='nfs4_acl_cmds.txt'):
     """
     遍历 root_dir 下所有文件和目录，
     读取POSIX ACL并转换为NFSv4 ACL (包含 default: 继承处理, mask限制)
@@ -192,7 +190,6 @@ def convert_acl_for_directory(root_dir, domain='localdomain', max_depth=3, nfs4_
     for dirpath, dirnames, filenames in os.walk(root_dir):
         # 计算当前目录的深度
         depth = dirpath[len(root_dir):].count(os.sep)
-        # print(f"Processing directory: {dirpath}, depth: {depth}")
         if depth >= max_depth:
             # 如果当前目录的深度超过了最大深度，则不再递归遍历子目录。适用于大型目录结构，只在最上的几层控制。
             dirnames[:] = []
@@ -201,7 +198,7 @@ def convert_acl_for_directory(root_dir, domain='localdomain', max_depth=3, nfs4_
         for p in all_paths:
             try:
                 # 获取 POSIX ACL。这里调用subprocess时，用了universal_newlines=True，以便输出是str而不是bytes。text=True也可以用于高于3.7的Python版本。
-                completed_proc = subprocess.run(["getfacl", "-p", p],
+                completed_proc = subprocess.run(["getfacl", p],
                                                 check=True,
                                                 stdout=subprocess.PIPE,
                                                 stderr=subprocess.PIPE,
@@ -212,31 +209,31 @@ def convert_acl_for_directory(root_dir, domain='localdomain', max_depth=3, nfs4_
                 continue
 
             acl_info = parse_getfacl_output(acl_output)
-            # nfs4_cmd = build_nfs4_acl_cmd(acl_info, p, domain=domain)
             ace_list = build_nfs4_ace(acl_info, p, domain=domain)
             if ace_list:
-                # debug print. nfs4_cmd = ["nfs4_setfacl", "-s"] + ace_list + [p]
-                print(f"\n# Setting NFSv4 ACL for {p} with command:")
-                print(f"nfs4_setfacl -s \"{' '.join(shlex.quote(x) for x in ace_list)}\" {p}")
-                # print(" ".join(shlex.quote(x) for x in nfs4_cmd))
+                new_dir = p.replace(root_dir, new_root_dir)
+                nfs4_cmd = f"nfs4_setfacl -s \"{' '.join(shlex.quote(x) for x in ace_list)}\" {new_dir}"
+                print(f"\n# Got POSIX ACL from {p}, setting NFSv4 ACL for {new_dir} with command:")
+                print(nfs4_cmd)
                 with open(nfs4_cmd_file, 'a') as f:
                     f.write(f"\n# Directory: {dirpath}\n")
-                    f.write(f"nfs4_setfacl -s \"{' '.join(shlex.quote(x) for x in ace_list)}\" {p}")
-                    # f.write(" ".join(shlex.quote(x) for x in nfs4_cmd) + '\n')
+                    f.write(nfs4_cmd)
+                    f.write("\n")
 
 def main():
     import sys
-    if len(sys.argv) < 2:
-        print(f"Usage: {sys.argv[0]} <directory> [domain]")
+    if len(sys.argv) < 3:
+        print(f"Usage: {sys.argv[0]} <directory> <new_directory> [domain]")
         sys.exit(1)
 
     root_dir = sys.argv[1]
-    domain = sys.argv[2] if len(sys.argv) > 2 else 'localdomain'
+    new_root_dir = sys.argv[2]
+    domain = sys.argv[3] if len(sys.argv) > 3 else 'localdomain'
     if not os.path.isdir(root_dir):
         print(f"Error: {root_dir} is not a valid directory.")
         sys.exit(1)
 
-    convert_acl_for_directory(root_dir, domain)
+    convert_acl_for_directory(root_dir, new_root_dir, domain)
 
 if __name__ == "__main__":
     main()
