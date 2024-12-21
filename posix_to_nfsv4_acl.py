@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # wanlin.wang
 # 2024/12/14, version 1.0
+# 2024/12/21, version 1.1, add support for Python 3.6.8 and other improvements
 
 
 import os
@@ -9,11 +10,14 @@ import shlex
 
 # --- POSIX => NFSv4 基本权限映射表 ---
 # 针对 'r', 'w', 'x' 做粗粒度映射到 NFSv4 权限子集。
-# 这里示例: r -> rtncy, w -> wTcCy, x -> x
+# 这里示例，借助alias来简化设置。规则是
+#    - file/dir: r -> R    , w -> W       ,  x -> X
+#        - file: r -> rntcy, w -> watTNcCy,  x -> xtcy
+#        - dir:  r -> rntcy, w -> waDtTNcCy, x -> xtcy
 PERM_MAP = {
-    'r': 'rtncy',
-    'w': 'wTcCy',
-    'x': 'x',
+    'r': 'R',
+    'w': 'W',
+    'x': 'X',
 }
 
 def convert_posix_perm_to_nfs4(posix_perm):
@@ -98,7 +102,8 @@ def parse_getfacl_output(acl_output):
 
     return result
 
-def build_nfs4_acl_cmd(acl_info, path="/dummy", domain='localdomain'):
+# def build_nfs4_acl_cmd(acl_info, path="/dummy", domain='localdomain'):
+def build_nfs4_ace(acl_info, path="/dummy", domain='localdomain'):
     ace_list = []
     # 普通 mask
     normal_mask = acl_info['mask'] if acl_info['mask'] else 'rwx'
@@ -111,28 +116,37 @@ def build_nfs4_acl_cmd(acl_info, path="/dummy", domain='localdomain'):
     owner_acl = next((e for e in acl_info['acl_entries']
                       if e['type'] == 'user' and e['name'] == ''), None)
     if owner_acl:
-        # owner 不受普通mask约束? 这里维持原逻辑
+        # owner 不受普通mask约束
         eff = apply_mask(owner_acl['perm'], 'rwx')
     else:
         eff = 'rwx'
     ace_list.append(f"A::OWNER@:{convert_posix_perm_to_nfs4(eff)}")
 
-    # 2) user:xxx (普通条目)
+    # 2) user:xxx 或 group:xxx (普通条目)
     for entry in acl_info['acl_entries']:
         if entry['type'] == 'user' and entry['name']:
             eff = apply_mask(entry['perm'], normal_mask)
             nfs4_perm = convert_posix_perm_to_nfs4(eff)
             if nfs4_perm:
                 ace_list.append(f"A::{entry['name']}@{domain}:{nfs4_perm}")
+        if entry['type'] == 'group' and entry['name']:
+            eff = apply_mask(entry['perm'], normal_mask)
+            nfs4_perm = convert_posix_perm_to_nfs4(eff)
+            if nfs4_perm:
+                ace_list.append(f"A:g:{entry['name']}@{domain}:{nfs4_perm}")
+            else:
+                ace_list.append(f"D:g:{entry['name']}@{domain}:RWXdo")
 
-    # 3) group::
+    # 3) group:: (空组)
     group_acl = next((e for e in acl_info['acl_entries']
                       if e['type'] == 'group' and e['name'] == ''), None)
     if group_acl:
         eff = apply_mask(group_acl['perm'], normal_mask)
         g_perm = convert_posix_perm_to_nfs4(eff)
         if g_perm:
-            ace_list.append(f"A::GROUP@:{g_perm}")
+            ace_list.append(f"A:g:GROUP@:{g_perm}")
+        else:
+            ace_list.append(f"D:g:GROUP@:RWXdo")
 
     # 4) other::
     other_acl = next((e for e in acl_info['acl_entries']
@@ -142,6 +156,8 @@ def build_nfs4_acl_cmd(acl_info, path="/dummy", domain='localdomain'):
         o_perm = convert_posix_perm_to_nfs4(eff)
         if o_perm:
             ace_list.append(f"A::EVERYONE@:{o_perm}")
+        else:
+            ace_list.append(f"D::EVERYONE@:RWXdo")
 
     # 5) default: ACL (带继承)
     for def_entry in acl_info['default_acl_entries']:
@@ -157,44 +173,56 @@ def build_nfs4_acl_cmd(acl_info, path="/dummy", domain='localdomain'):
                 ace_list.append(f"A:fd:OWNER@:{nfs4_perm}")
             else:
                 ace_list.append(f"A:fd:{def_entry['name']}@{domain}:{nfs4_perm}")
-        elif entry_type == 'group' and def_entry['name'] == '':
-            ace_list.append(f"A:fd:GROUP@:{nfs4_perm}")
+        elif entry_type == 'group':
+            if def_entry['name'] == '':
+                ace_list.append(f"A:fdg:GROUP@:{nfs4_perm}")
+            else:
+                ace_list.append(f"A:fdg:{def_entry['name']}@{domain}:{nfs4_perm}")
         elif entry_type == 'other':
             pass
+    return ace_list
+    #cmd = ["nfs4_setfacl", "-s"] + ace_list + [path]
+    #return cmd
 
-    cmd = ["nfs4_setfacl", "-s"] + ace_list + [path]
-    return cmd
-
-def convert_acl_for_directory(root_dir, domain='localdomain'):
+def convert_acl_for_directory(root_dir, domain='localdomain', max_depth=3, nfs4_cmd_file='nfs4_acl_cmds.txt'):
     """
     遍历 root_dir 下所有文件和目录，
     读取POSIX ACL并转换为NFSv4 ACL (包含 default: 继承处理, mask限制)
     """
     for dirpath, dirnames, filenames in os.walk(root_dir):
+        # 计算当前目录的深度
+        depth = dirpath[len(root_dir):].count(os.sep)
+        # print(f"Processing directory: {dirpath}, depth: {depth}")
+        if depth >= max_depth:
+            # 如果当前目录的深度超过了最大深度，则不再递归遍历子目录。适用于大型目录结构，只在最上的几层控制。
+            dirnames[:] = []
+
         all_paths = [dirpath] + [os.path.join(dirpath, f) for f in filenames]
         for p in all_paths:
             try:
+                # 获取 POSIX ACL。这里调用subprocess时，用了universal_newlines=True，以便输出是str而不是bytes。text=True也可以用于高于3.7的Python版本。
                 completed_proc = subprocess.run(["getfacl", "-p", p],
                                                 check=True,
                                                 stdout=subprocess.PIPE,
                                                 stderr=subprocess.PIPE,
-                                                text=True)
+                                                universal_newlines=True)
                 acl_output = completed_proc.stdout
             except subprocess.CalledProcessError as e:
                 print(f"Warning: getfacl failed on {p}, error: {e}")
                 continue
 
             acl_info = parse_getfacl_output(acl_output)
-            nfs4_cmd = build_nfs4_acl_cmd(acl_info, p, domain=domain)
-            if len(nfs4_cmd) > 2:
-                # debug print
-                print(f"\nSetting NFSv4 ACL for {p} with command:")
-                print(" ".join(shlex.quote(x) for x in nfs4_cmd))
-                # 实际执行
-                try:
-                    subprocess.run(nfs4_cmd, check=True)
-                except subprocess.CalledProcessError as e:
-                    print(f"Warning: nfs4_setfacl failed on {p}, error: {e}")
+            # nfs4_cmd = build_nfs4_acl_cmd(acl_info, p, domain=domain)
+            ace_list = build_nfs4_ace(acl_info, p, domain=domain)
+            if ace_list:
+                # debug print. nfs4_cmd = ["nfs4_setfacl", "-s"] + ace_list + [p]
+                print(f"\n# Setting NFSv4 ACL for {p} with command:")
+                print(f"nfs4_setfacl -s \"{' '.join(shlex.quote(x) for x in ace_list)}\" {p}")
+                # print(" ".join(shlex.quote(x) for x in nfs4_cmd))
+                with open(nfs4_cmd_file, 'a') as f:
+                    f.write(f"\n# Directory: {dirpath}\n")
+                    f.write(f"nfs4_setfacl -s \"{' '.join(shlex.quote(x) for x in ace_list)}\" {p}")
+                    # f.write(" ".join(shlex.quote(x) for x in nfs4_cmd) + '\n')
 
 def main():
     import sys
