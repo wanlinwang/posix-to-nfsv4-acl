@@ -12,7 +12,7 @@ posix_to_nfs4_acl/
 
 - **posix_to_nfs4_acl.py**  
   - `parse_getfacl_output(acl_output)`: Parses the output of the `getfacl` command to extract the POSIX ACL structure.  
-  - `build_nfs4_acl_cmd(acl_info, path, domain='localdomain')`: Maps the parsed results into NFSv4 ACEs and constructs the `nfs4_setfacl -s` command.  
+  - `build_nfs4_ace(acl_info, path, domain='localdomain')`: Maps the parsed results into NFSv4 ACEs and constructs the `nfs4_setfacl -s` command.  
   - `convert_acl_for_directory(root_dir, domain='localdomain')`: Recursively traverses the specified directory and performs conversion.  
   - **Main Entry Point** (`main()`): Command-line tool's execution entry point.  
 
@@ -72,7 +72,7 @@ posix_to_nfs4_acl/
    NFSv4 permission strings represent a set of permissions, and the order is irrelevant. The script removes duplicates and sorts characters. As long as the correct permission bits are included, the output is valid.
 
 2. **Owner permissions unaffected by the mask**:  
-   Based on POSIX ACL specifications, `user::` (owner) permissions are not affected by the `mask` entry. To customize this behavior, modify the handling of owners in `build_nfs4_acl_cmd()`.
+   Based on POSIX ACL specifications, `user::` (owner) permissions are not affected by the `mask` entry. To customize this behavior, modify the handling of owners in `build_nfs4_ace()`.
 
 3. **Handling inheritance for default ACLs (`default:`)**:  
    The script automatically converts `default:xxx` into the NFSv4 inheritance flag `fd`. If `default:mask::xxx` exists, it applies `default_mask` restrictions to the default ACL.
@@ -104,7 +104,7 @@ posix_to_nfs4_acl/
 
 - **posix_to_nfs4_acl.py**  
   - `parse_getfacl_output(acl_output)`: 解析 `getfacl` 命令的输出文本，提取POSIX ACL结构  
-  - `build_nfs4_acl_cmd(acl_info, path, domain='localdomain')`: 将解析结果映射生成NFSv4 ACE并拼接成 `nfs4_setfacl -s` 命令  
+  - `build_nfs4_ace(acl_info, path, domain='localdomain')`: 将解析结果映射生成NFSv4 ACE并拼接成 `nfs4_setfacl -s` 命令  
   - `convert_acl_for_directory(root_dir, domain='localdomain')`: 递归遍历指定目录并进行转换  
   - **主入口**(`main()`): 命令行工具的执行入口  
 
@@ -116,7 +116,7 @@ posix_to_nfs4_acl/
     4. only_owner_group_other  
     5. empty_acl  
     6. mask_more_restrictive_than_nominal  
-  - 每个测试用例会构造一段POSIX ACL文本，调用脚本中的 `parse_getfacl_output()` 与 `build_nfs4_acl_cmd()`，然后进行断言检查。
+  - 每个测试用例会构造一段POSIX ACL文本，调用脚本中的 `parse_getfacl_output()` 与 `build_nfs4_ace()`，然后进行断言检查。
 
 ## 环境要求
 
